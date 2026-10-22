@@ -2,6 +2,7 @@
   'use strict';
   const { TARGET_MS, totals, transition, validate } = WorkdayTracker;
   const KEY = 'workday.v1';
+  const THEME_KEY = 'workday.theme.v1';
   const element = id => document.getElementById(id);
   let days = [];
   let selectedId = null;
@@ -10,14 +11,33 @@
   let renderedHistory = '';
   const pages = { sessions: 0, history: 0 };
 
+  function updateTabIndicator() {
+    const selected = document.querySelector('.tab-bar [data-view][aria-selected="true"]');
+    const indicator = element('tab-indicator');
+    if (!selected || !indicator) return;
+    const navBounds = selected.parentElement.getBoundingClientRect();
+    const tabBounds = selected.getBoundingClientRect();
+    const width = tabBounds.width * 0.38;
+    const offset = tabBounds.left - navBounds.left + (tabBounds.width - width) / 2;
+    indicator.style.width = `${width}px`;
+    indicator.style.transform = `translateX(${offset}px)`;
+  }
+
   function showView(name, focus = false) {
-    for (const tab of document.querySelectorAll('[data-view]')) {
+    const tabs = [...document.querySelectorAll('[data-view]')];
+    const currentIndex = tabs.findIndex(tab => tab.getAttribute('aria-selected') === 'true');
+    const targetIndex = tabs.findIndex(tab => tab.dataset.view === name);
+    if (currentIndex >= 0 && targetIndex >= 0 && currentIndex !== targetIndex) {
+      element(`${name}-view`).dataset.swipe = targetIndex > currentIndex ? 'left' : 'right';
+    }
+    for (const tab of tabs) {
       const selected = tab.dataset.view === name;
       tab.setAttribute('aria-selected', String(selected));
       tab.tabIndex = selected ? 0 : -1;
       element(`${tab.dataset.view}-view`).hidden = !selected;
       if (selected && focus) tab.focus();
     }
+    updateTabIndicator();
     render();
   }
 
@@ -36,6 +56,27 @@
     element('notice').hidden = !message;
   }
 
+  function applyTheme(theme) {
+    const dark = theme === 'dark';
+    const label = `Switch to ${dark ? 'light' : 'dark'} mode`;
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    document.querySelector('meta[name="theme-color"]').content = dark ? '#161615' : '#f5f5f2';
+    element('theme-toggle').setAttribute('aria-label', label);
+    element('theme-toggle').setAttribute('aria-pressed', String(dark));
+    element('theme-toggle').title = label;
+    element('theme-toggle').innerHTML = `<svg aria-hidden="true"><use href="#${dark ? 'sun' : 'moon'}"/></svg>`;
+  }
+
+  try {
+    applyTheme(localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light');
+  } catch {
+    applyTheme('light');
+  }
+  element('theme-toggle').addEventListener('click', () => {
+    const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    applyTheme(theme);
+    try { localStorage.setItem(THEME_KEY, theme); } catch {}
+  });
   function readStorage() {
     try {
       const raw = localStorage.getItem(KEY);
@@ -236,6 +277,27 @@
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
     showView(tabs[next].dataset.view, true);
   });
+  let swipeStart = null;
+  const main = document.querySelector('main');
+  main.addEventListener('pointerdown', event => {
+    if (event.pointerType !== 'touch' || event.target.closest('button,a,input,select,textarea,[contenteditable="true"]')) {
+      swipeStart = null;
+      return;
+    }
+    swipeStart = { x: event.clientX, y: event.clientY };
+  });
+  main.addEventListener('pointerup', event => {
+    if (!swipeStart) return;
+    const deltaX = event.clientX - swipeStart.x;
+    const deltaY = event.clientY - swipeStart.y;
+    swipeStart = null;
+    if (Math.abs(deltaX) < 55 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) return;
+    const tabs = [...document.querySelectorAll('[data-view]')];
+    const currentIndex = tabs.findIndex(tab => tab.getAttribute('aria-selected') === 'true');
+    const nextIndex = Math.max(0, Math.min(tabs.length - 1, currentIndex + (deltaX < 0 ? 1 : -1)));
+    if (nextIndex !== currentIndex) showView(tabs[nextIndex].dataset.view);
+  });
+  main.addEventListener('pointercancel', () => { swipeStart = null; });
   for (const name of ['sessions', 'history']) {
     for (const direction of ['previous', 'next']) {
       element(`${name}-${direction}`).addEventListener('click', () => {
@@ -245,11 +307,13 @@
     }
   }
   new ResizeObserver(() => render()).observe(document.querySelector('main'));
-  window.addEventListener('resize', render);
+  window.addEventListener('resize', () => { render(); updateTabIndicator(); });
   readStorage();
   render();
+  updateTabIndicator();
   setInterval(render, 1000);
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    navigator.serviceWorker.addEventListener('controllerchange', () => location.reload());
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
 })();
